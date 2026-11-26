@@ -153,7 +153,10 @@ export function createDeepSeekClient(config) {
       }
       throw new Error(`DeepSeek API 错误：${detail}`);
     }
-    const reader = response.body.getReader();
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("DeepSeek API 错误：响应没有内容流");
+    }
     const decoder = new TextDecoder();
     let buffer = "";
     try {

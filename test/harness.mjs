@@ -2,7 +2,7 @@
 // 模拟 T3 Code 客户端的 JSON-RPC 行为，mock 后端不访问真实 DeepSeek API。
 // 运行：node test/harness.mjs
 import { join, dirname } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -350,12 +350,50 @@ async function scenario6() {
   check("usage_update 使用最后一轮 usage", usage?.used === 202, JSON.stringify(usage));
 }
 
+async function scenario7() {
+  console.log("\n场景 7：bash 多行命令（Windows 走临时 .cmd，其他平台走 sh -c）");
+  const win = process.platform === "win32";
+  const { agent, client } = makeAgent();
+  const created = await client.request("session/new", { cwd: root, mcpServers: [] });
+  const session = agent.sessions.get(created.sessionId);
+  let captured = null;
+  let capturedContent = null;
+  let capturedTempPath = null;
+  const forward = agent.onWrite;
+  agent.onWrite = (msg) => {
+    if (msg.method === "terminal/create") {
+      captured = msg.params;
+      if (win) {
+        const arg = msg.params?.args?.[3];
+        if (typeof arg === "string" && arg.startsWith('"')) {
+          capturedTempPath = arg.replace(/^"|"$/g, "");
+          try {
+            capturedContent = readFileSync(capturedTempPath, "utf8");
+          } catch {
+            capturedContent = null;
+          }
+        }
+      }
+    }
+    forward(msg);
+  };
+  const script = "echo line1\necho line2";
+  await agent.execTool(session, "bash", { command: script });
+  if (win) {
+    check("多行命令改走 call 临时 .cmd", captured?.args?.[2] === "call", JSON.stringify(captured?.args));
+    check("临时脚本含完整多行内容", capturedContent?.includes("@echo off") && capturedContent?.includes("echo line1") && capturedContent?.includes("echo line2"));
+    check("执行后临时脚本已清理", capturedTempPath !== null && !existsSync(capturedTempPath));
+  } else {
+    check("非 Windows 用 sh -c 原样传参", captured?.args?.[0] === "-c" && captured?.args?.[1] === script, JSON.stringify(captured?.args));
+  }
+}
+
 async function main() {
   console.log("T3 DeepSeek 协议级测试（进程内 + mock 后端）\n");
   const order =
     process.env.S3_FIRST === "1"
-      ? [["场景 3", scenario3], ["场景 1", scenario1], ["场景 2", scenario2], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6]]
-      : [["场景 1", scenario1], ["场景 2", scenario2], ["场景 3", scenario3], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6]];
+      ? [["场景 3", scenario3], ["场景 1", scenario1], ["场景 2", scenario2], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6], ["场景 7", scenario7]]
+      : [["场景 1", scenario1], ["场景 2", scenario2], ["场景 3", scenario3], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6], ["场景 7", scenario7]];
   for (const [name, run] of order) {
     try {
       await run();

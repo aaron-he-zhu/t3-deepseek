@@ -2,8 +2,8 @@
 // T3 DeepSeek — 把 DeepSeek 官方 API 接进 T3 Code 的本地 ACP agent。
 // 协议：Agent Client Protocol v1（JSON-RPC 2.0 / NDJSON over stdio）。
 // 零依赖：仅使用 Node 内置模块，由 T3 Code 自带的 Electron(ELECTRON_RUN_AS_NODE) 或任意 Node 18+ 运行。
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDeepSeekClient } from "./deepseek-client.mjs";
@@ -456,8 +456,24 @@ export class T3DeepSeekAgent {
       return { text: `已写入 ${targetPath}（${args.content.length} 字符）`, content };
     }
     if (name === "bash") {
-      const command = process.platform === "win32" ? "cmd.exe" : "sh";
-      const commandArgs = process.platform === "win32" ? ["/d", "/c", String(args.command ?? "")] : ["-c", String(args.command ?? "")];
+      const script = String(args.command ?? "");
+      const isWindows = process.platform === "win32";
+      // Windows 的 cmd /c 只执行第一个换行前的命令，多行脚本写入临时 .cmd 执行
+      const tempScript = isWindows && script.includes("\n")
+        ? join(
+            tmpdir(),
+            `t3ds-cmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.cmd`,
+          )
+        : null;
+      if (tempScript) {
+        writeFileSync(tempScript, `@echo off\r\n${script.replace(/\r?\n/g, "\r\n")}\r\n`, "utf8");
+      }
+      const command = isWindows ? "cmd.exe" : "sh";
+      const commandArgs = isWindows
+        ? tempScript
+          ? ["/d", "/c", "call", `"${tempScript}"`]
+          : ["/d", "/c", script]
+        : ["-c", script];
       const created = await this.callClient(
         "terminal/create",
         {
@@ -490,6 +506,13 @@ export class T3DeepSeekAgent {
           : output || "[无输出]";
         return { text: truncate(text, MAX_TOOL_OUTPUT_CHARS) };
       } finally {
+        if (tempScript) {
+          try {
+            rmSync(tempScript, { force: true });
+          } catch {
+            // 清理失败不影响
+          }
+        }
         try {
           await this.callClient("terminal/release", { sessionId: session.id, terminalId });
         } catch {
