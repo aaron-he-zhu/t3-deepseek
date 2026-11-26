@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { T3DeepSeekAgent } from "../src/acp-server.mjs";
 
 const root = join(fileURLToPath(import.meta.url), "..", "..");
@@ -270,12 +271,91 @@ async function scenario5() {
   }
 }
 
+async function scenario6() {
+  console.log("\n场景 6：真实 HTTP + SSE 流式路径（本地 mock 服务器）");
+  // 模拟 DeepSeek 的 /chat/completions 流式响应：增量 reasoning/content/tool_calls + usage
+  const sseRounds = [
+    [
+      { choices: [{ delta: { reasoning_content: "先看看目录。" } }] },
+      { choices: [{ delta: { content: "我来查看目录。" } }] },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: "call_sse_1", function: { name: "bash", arguments: "{\"command\":\"" } },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, function: { arguments: "dir\"}" } }] } },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: { total_tokens: 101 } },
+    ],
+    [
+      { choices: [{ delta: { content: "完成！" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }], usage: { total_tokens: 202 } },
+    ],
+  ];
+  const seen = { requests: 0, authHeader: null, lastBody: null };
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      seen.requests += 1;
+      seen.authHeader = req.headers.authorization ?? null;
+      seen.lastBody = body;
+      const round = sseRounds[Math.min(seen.requests - 1, sseRounds.length - 1)];
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      for (const chunk of round) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+
+  const { client } = makeAgent({
+    apiKey: "sk-local-test",
+    baseUrl: `http://127.0.0.1:${port}`,
+    mock: false,
+  });
+  await client.request("initialize", {
+    protocolVersion: 1,
+    clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+  });
+  const created = await client.request("session/new", { cwd: root, mcpServers: [] });
+  const result = await client.request("session/prompt", {
+    sessionId: created.sessionId,
+    prompt: [{ type: "text", text: "看看目录" }],
+  });
+  server.close();
+
+  check("prompt 返回 end_turn", result.stopReason === "end_turn", JSON.stringify(result));
+  check("发出 2 次 API 请求（两轮）", seen.requests === 2, String(seen.requests));
+  check("Authorization 头正确", seen.authHeader === "Bearer sk-local-test", String(seen.authHeader));
+  check("请求体含 tools 与 stream", seen.lastBody.includes("\"tools\"") && seen.lastBody.includes("\"stream\":true"));
+  const texts = client.updates
+    .filter((u) => u.sessionUpdate === "agent_message_chunk")
+    .map((u) => u.content?.text ?? "")
+    .join("");
+  check("收到流式正文", texts.includes("我来查看目录。") && texts.includes("完成！"));
+  check("reasoning 增量转为 agent_thought_chunk", client.updates.some((u) => u.sessionUpdate === "agent_thought_chunk"));
+  check("分块工具调用被聚合并执行", client.updates.some((u) => u.sessionUpdate === "tool_call_update" && u.status === "completed"));
+  const usage = client.updates.find((u) => u.sessionUpdate === "usage_update");
+  check("usage_update 使用最后一轮 usage", usage?.used === 202, JSON.stringify(usage));
+}
+
 async function main() {
   console.log("T3 DeepSeek 协议级测试（进程内 + mock 后端）\n");
   const order =
     process.env.S3_FIRST === "1"
-      ? [["场景 3", scenario3], ["场景 1", scenario1], ["场景 2", scenario2], ["场景 4", scenario4], ["场景 5", scenario5]]
-      : [["场景 1", scenario1], ["场景 2", scenario2], ["场景 3", scenario3], ["场景 4", scenario4], ["场景 5", scenario5]];
+      ? [["场景 3", scenario3], ["场景 1", scenario1], ["场景 2", scenario2], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6]]
+      : [["场景 1", scenario1], ["场景 2", scenario2], ["场景 3", scenario3], ["场景 4", scenario4], ["场景 5", scenario5], ["场景 6", scenario6]];
   for (const [name, run] of order) {
     try {
       await run();

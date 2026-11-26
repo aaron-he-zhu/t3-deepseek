@@ -1,5 +1,7 @@
 # T3 DeepSeek
 
+[![test](https://github.com/aaron-he-zhu/t3-deepseek/actions/workflows/test.yml/badge.svg)](https://github.com/aaron-he-zhu/t3-deepseek/actions/workflows/test.yml)
+
 把 **DeepSeek 官方 API** 一键接进 **T3 Code** 的插件。你只需要粘贴一次 API Key，不需要理解 ACP 是什么。
 
 ## 对 agent 说一句就装好（推荐）
