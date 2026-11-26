@@ -199,8 +199,13 @@ async function scenario3() {
 
 async function scenario4() {
   console.log("\n场景 4：工具相对路径归一化为会话 cwd 下的绝对路径");
+  const win = process.platform === "win32";
+  const cwd = win ? "C:\\proj" : "/proj";
+  const rel = win ? "src\\a.txt" : "src/a.txt";
+  const abs = win ? "C:\\abs\\b.txt" : "/abs/b.txt";
+  const expectedRel = win ? "C:\\proj\\src\\a.txt" : "/proj/src/a.txt";
   const { agent, client } = makeAgent();
-  const created = await client.request("session/new", { cwd: "C:\\proj", mcpServers: [] });
+  const created = await client.request("session/new", { cwd, mcpServers: [] });
   const session = agent.sessions.get(created.sessionId);
   const receivedPaths = [];
   const forward = agent.onWrite;
@@ -208,10 +213,10 @@ async function scenario4() {
     if (msg.method === "fs/write_text_file") receivedPaths.push(msg.params.path);
     forward(msg);
   };
-  await agent.execTool(session, "write_file", { path: "src\\a.txt", content: "x" });
-  await agent.execTool(session, "write_file", { path: "C:\\abs\\b.txt", content: "y" });
-  check("相对路径归一化为 cwd 下绝对路径", receivedPaths[0] === "C:\\proj\\src\\a.txt", String(receivedPaths[0]));
-  check("绝对路径原样透传", receivedPaths[1] === "C:\\abs\\b.txt", String(receivedPaths[1]));
+  await agent.execTool(session, "write_file", { path: rel, content: "x" });
+  await agent.execTool(session, "write_file", { path: abs, content: "y" });
+  check("相对路径归一化为 cwd 下绝对路径", receivedPaths[0] === expectedRel, String(receivedPaths[0]));
+  check("绝对路径原样透传", receivedPaths[1] === abs, String(receivedPaths[1]));
 }
 
 async function scenario5() {
