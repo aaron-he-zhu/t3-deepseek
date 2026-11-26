@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "apiKey": "",
+  "baseUrl": "https://api.deepseek.com",
+  "defaultModel": "deepseek-chat",
+  "models": [
+    { "id": "deepseek-chat", "name": "DeepSeek-V3 (deepseek-chat)", "description": "通用对话与编码模型" },
+    { "id": "deepseek-reasoner", "name": "DeepSeek-R1 (deepseek-reasoner)", "description": "深度推理模型" }
+  ]
+}
